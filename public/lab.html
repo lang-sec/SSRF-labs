@@ -3,7 +3,6 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="light">
     <title>SSRF Field Lab</title>
     <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/assets/app.css">
@@ -12,152 +11,20 @@
 <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
 
-    <div class="app-shell">
-        <header class="masthead">
-            <a class="brand" href="#intro" aria-label="返回 SSRF Field Lab 起点">
-                <span class="brand-mark" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none">
-                        <circle cx="5" cy="6" r="2.5"></circle>
-                        <circle cx="19" cy="6" r="2.5"></circle>
-                        <circle cx="12" cy="18" r="2.5"></circle>
-                        <path d="M7.5 6h9M6.4 8.1l4.2 7.7M17.6 8.1l-4.2 7.7"></path>
-                    </svg>
-                </span>
-                <span class="brand-copy">
-                    <strong>SSRF</strong>
-                    <span>Field Lab</span>
-                </span>
-            </a>
-
-            <div class="masthead-progress" aria-label="学习进度">
-                <div class="masthead-progress-copy">
-                    <span>学习进度</span>
-                    <strong id="progress-label">0 / 6</strong>
-                </div>
-                <div class="progress-track" aria-hidden="true">
-                    <span id="progress-bar"></span>
-                </div>
-            </div>
-
-            <div class="masthead-actions">
-                <span class="server-state">
-                    <i aria-hidden="true"></i>
-                    <span>PHP 本地运行中</span>
-                </span>
-                <button class="trace-shortcut" id="trace-shortcut" type="button" aria-controls="trace-dock" aria-expanded="false">
-                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <path d="M4 19V9"></path>
-                        <path d="M10 19V5"></path>
-                        <path d="M16 19v-7"></path>
-                        <path d="M22 19V3"></path>
-                    </svg>
-                    <span>请求轨迹</span>
-                    <b id="trace-count">0</b>
-                </button>
-                <button class="icon-button" id="reset-progress" type="button" title="清空本机学习进度" aria-label="清空本机学习进度">
-                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path>
-                        <path d="M3 3v5h5"></path>
-                    </svg>
-                </button>
-            </div>
-        </header>
-
-        <div class="workspace-shell">
-            <aside class="course-rail" aria-label="学习路径">
-                <div class="course-rail-heading">
-                    <span>课程导航</span>
-                    <strong>请求路由实验</strong>
-                </div>
-                <nav id="stage-nav" class="stage-nav" aria-label="关卡导航"></nav>
-                <div class="rail-footer">
-                    <div class="boundary-status">
-                        <span class="status-light" aria-hidden="true"></span>
-                        <div>
-                            <strong>回环边界有效</strong>
-                            <span>127.0.0.0/8 · 8080–8084 · TCP 6380</span>
-                        </div>
-                    </div>
-                    <p>仅用于本机学习，请勿部署到公网环境。</p>
-                </div>
-            </aside>
-
-            <main class="main-panel" id="main-content">
-                <div class="context-bar">
-                    <div class="breadcrumb" aria-label="当前位置">
-                        <span>本地实验</span>
-                        <span class="breadcrumb-separator" aria-hidden="true">/</span>
-                        <strong id="breadcrumb-current">起点</strong>
-                    </div>
-                    <span class="context-hint" id="context-hint">从请求链路开始理解 SSRF</span>
-                </div>
-
-                <div id="content" class="content" aria-live="polite">
-                    <div class="loading-state">
-                        <span class="loading-signal" aria-hidden="true"></span>
-                        <div>
-                            <strong>正在装载靶场</strong>
-                            <p>连接本地服务并读取关卡配置。</p>
-                        </div>
-                    </div>
-                </div>
-            </main>
+    <header class="site-header">
+        <div class="site-brand">SSRF Field Lab</div>
+        <div class="site-progress">
+            <span id="progress-label">0 / 16</span>
+            <div class="progress-track" aria-hidden="true"><span id="progress-bar"></span></div>
         </div>
+        <button class="link-button" id="reset-progress" type="button">重置进度</button>
+    </header>
 
-        <section class="trace-dock" id="trace-dock" aria-label="服务端请求轨迹">
-            <button class="trace-dock-toggle" id="trace-toggle" type="button" aria-controls="trace-dock-body" aria-expanded="false">
-                <span class="trace-grip" aria-hidden="true"><i></i><i></i><i></i></span>
-                <span class="trace-title">
-                    <strong>服务端请求轨迹</strong>
-                    <span id="trace-summary">尚无请求，展开查看实时记录</span>
-                </span>
-                <span class="trace-legend" aria-hidden="true">
-                    <i class="legend-dot allowed"></i>
-                    <span>已放行</span>
-                    <i class="legend-dot blocked"></i>
-                    <span>已拦截</span>
-                    <i class="legend-dot solved"></i>
-                    <span>已命中</span>
-                </span>
-                <span class="trace-chevron" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none"><path d="m6 9 6 6 6-6"></path></svg>
-                </span>
-            </button>
-
-            <div class="trace-dock-body" id="trace-dock-body" hidden>
-                <header class="trace-body-header">
-                    <div>
-                        <span class="trace-eyebrow">Server-side view</span>
-                        <h2>每一次校验与跳转</h2>
-                    </div>
-                    <div class="trace-actions">
-                        <span class="live-indicator"><i></i> 每 4 秒刷新</span>
-                        <button class="icon-button light" id="refresh-logs" type="button" title="刷新请求记录" aria-label="刷新请求记录">
-                            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                <path d="M21 12a9 9 0 1 1-3-6.7"></path>
-                                <path d="M21 3v6h-6"></path>
-                            </svg>
-                        </button>
-                        <button class="icon-button light" id="clear-logs" type="button" title="清空请求记录" aria-label="清空请求记录">
-                            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                <path d="M3 6h18"></path>
-                                <path d="M8 6V4h8v2"></path>
-                                <path d="m9 11 6 6M15 11l-6 6"></path>
-                            </svg>
-                        </button>
-                    </div>
-                </header>
-                <div id="log-list" class="log-list">
-                    <div class="log-empty">
-                        <span class="log-empty-mark" aria-hidden="true">00</span>
-                        <div>
-                            <strong>还没有请求</strong>
-                            <p>从任意关卡发起一次服务端请求后，这里会记录应用层校验、实际目标和响应状态。</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </section>
+    <div class="layout">
+        <nav id="stage-nav" class="level-list" aria-label="关卡列表"></nav>
+        <main id="main-content" class="content" tabindex="-1">
+            <div id="content"></div>
+        </main>
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>

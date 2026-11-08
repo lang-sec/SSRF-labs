@@ -20,47 +20,37 @@ function lab_level_code_examples(): array
 {
     return [
         1 => [
-            'label' => 'ProductImageController.php / ImageProxy.php',
+            'label' => 'ReflectedSsrfCheck.php / TargetProbe.php',
             'code' => <<<'PHP'
 <?php
 /*
- * 学习目标：理解“服务端请求”为什么比浏览器请求更危险。
- * $input 是业务接口已经解析好的 JSON 请求体。
+ * 学习目标：用验证端点返回的 MD5 判断有回显 SSRF。
+ * 验证端点：http://10.220.2.6:8080/
  */
 // POST /products/import-image
-// 业务场景：商品图片远程导入
-$url = trim((string) ($input['url'] ?? ''));
+// 业务场景：目标可达性验证
+$url = trim((string) ($input['image_url'] ?? ''));
 
-// 创建 curl 句柄。后续所有请求选项都绑定到这个句柄。
+// 服务端直接请求用户提供的 URL。
 $ch = curl_init($url);
 curl_setopt_array($ch, [
-    // 让 curl 把响应正文作为字符串返回。
     CURLOPT_RETURNTRANSFER => true,
-    // 限制最长等待时间，避免请求一直挂着。
     CURLOPT_TIMEOUT        => 4,
-    // 禁用系统代理，确保实验只连接本机目标。
     CURLOPT_PROXY          => '',
 ]);
-
-// 真正发起请求。这里的网络身份属于 PHP 服务进程，而不是浏览器。
 $body   = curl_exec($ch);
-// 读取 HTTP 状态码，便于前端展示。
 $status = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
 curl_close($ch);
 
-// 没有校验 Host、端口、协议或 IP，直接把完整响应返回。
+// 验证端点根路径返回 32 位十六进制 MD5。
+if (preg_match('/\b[a-f0-9]{32}\b/i', (string) $body, $match)) {
+    echo "存在有回显 SSRF，MD5: {$match[0]}\n";
+}
+
 return [
     'status' => $status,
     'body'   => $body,
 ];
-
-// 被访问的目标服务：模拟云元数据服务。
-if ($path === '/latest/meta-data/iam/security-credentials/lab-role') {
-    echo json_encode([
-        'AccessKeyId' => 'ASIA_LAB_ONLY_DEMO',
-        'Token'       => 'FLAG{...}',
-    ], JSON_UNESCAPED_UNICODE);
-}
 PHP,
         ],
         2 => [
@@ -73,7 +63,7 @@ PHP,
  */
 // POST /merchants/import-logo
 // 业务场景：品牌 Logo 自动抓取
-$url = trim((string) ($input['url'] ?? ''));
+$url = trim((string) ($input['logo_url'] ?? ''));
 
 // 只检查原始 URL 中是否出现几个固定字符串。
 // 它不会知道 curl 最终会解析到哪个 IP。
@@ -120,7 +110,7 @@ PHP,
  */
 // POST /campaigns/check-asset
 // 业务场景：营销落地页素材检查
-$url = trim((string) ($input['url'] ?? ''));
+$url = trim((string) ($input['asset_url'] ?? ''));
 
 // str_contains 检查整段字符串，路径和查询参数也会被扫描。
 if (!str_contains($url, 'shop.local')) {
@@ -159,7 +149,7 @@ PHP,
  */
 // POST /messages/link-preview
 // 业务场景：站外链接预览
-$url   = trim((string) ($input['url'] ?? ''));
+$url   = trim((string) ($input['preview_url'] ?? ''));
 $parts = parse_url($url);
 
 // 只检查最初的 URL 是否属于公开预览服务。
@@ -205,7 +195,7 @@ final class AvatarPreviewController
         DnsLookup $dns,
         RemoteAssetFetcher $fetcher
     ): JsonResponse {
-        $url = (string) $request->input('url');
+        $url = (string) $request->input('avatar_url');
         $host = strtolower((string) parse_url($url, PHP_URL_HOST));
 
         if (!str_ends_with($host, '.cdn-preview.ssrf.lab')) {
@@ -251,7 +241,7 @@ PHP,
  */
 // POST /knowledge-base/preview-attachment
 // 业务场景：知识库附件预览
-$url = trim((string) ($input['url'] ?? ''));
+$url = trim((string) ($input['attachment_url'] ?? ''));
 
 // 危险协议黑名单只列出三项，没有禁止 file。
 if (preg_match('/^(gopher|dict|ftp):/i', $url)) {
@@ -435,29 +425,29 @@ function lab_challenges(): array
         1 => [
             'id' => 1,
             'key' => 'direct',
-            'title' => '直连内部服务',
+            'title' => '有回显 SSRF 验证',
             'difficulty' => '基础',
-            'summary' => '商品后台允许商家提交远程图片 URL，图片代理直接下载并返回预览。',
-            'concept' => '图片导入只应该是“读取一张商品图”，但代码把完整网络目标交给了用户，业务服务器因此会带着自己的内网身份访问任意地址。',
-            'goal' => '让商品图片导入服务读取模拟元数据凭据。',
-            'targetLabel' => '商品图片代理 :8082',
-            'target' => 'http://127.0.0.1:8082/latest/meta-data/iam/security-credentials/lab-role',
+            'summary' => '把验证端点根路径交给业务服务端；如果响应返回 MD5，说明存在有回显 SSRF。',
+            'concept' => '有回显 SSRF 的特征是：服务端替调用方请求了目标地址，并把目标响应带回来。验证端点根路径会返回一段 MD5。',
+            'goal' => '让业务服务端请求验证端点根路径，并观察响应中的 MD5。',
+            'targetLabel' => '验证端点 10.220.2.6:8080',
+            'target' => 'http://10.220.2.6:8080/',
             'codeLabel' => $codeExamples[1]['label'],
             'snippet' => $codeExamples[1]['code'],
             'cause' => $causes[1],
-            'filter' => '无校验：只要目标可达，服务端就会发起请求。',
+            'filter' => '目标校验：请求验证端点根路径，响应返回 MD5 即命中。',
             'hints' => [
-                '浏览器访问不到内部服务，不代表业务服务器访问不到。',
-                '把请求交给服务端，而不是让浏览器直接打开链接。',
-                '提交：http://127.0.0.1:8082/latest/meta-data/iam/security-credentials/lab-role',
+                '把验证端点根路径交给服务端请求。',
+                '如果响应里出现 32 位十六进制字符串（MD5），说明请求确实到达了目标。',
+                '提交：http://10.220.2.6:8080/',
             ],
             'answerSteps' => [
-                '确认输入框中的 URL 由服务端执行请求。',
-                '直接提交模拟元数据地址 /latest/meta-data/iam/security-credentials/lab-role。',
-                '响应中的 FLAG 被返回，说明业务服务器成功访问了内部链路。',
+                '提交验证端点根路径。',
+                '业务服务端向 10.220.2.6:8080 发起请求。',
+                '响应返回 MD5，说明存在有回显 SSRF。',
             ],
-            'defense' => '渲染远程内容前先建立目标白名单；禁止访问回环、私网、链路本地地址和云元数据地址。',
-            'successFlag' => 'FLAG{SSRF_DIRECT_METADATA_ACCESS}',
+            'defense' => '不要把用户输入直接交给服务端 HTTP 客户端；校验最终解析 IP，并限制允许访问的目标集合。',
+            'successFlag' => 'FLAG{SSRF_REFLECTED_MD5}',
         ],
         2 => [
             'id' => 2,

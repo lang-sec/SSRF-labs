@@ -1,0 +1,46 @@
+services:
+  ssrf-lab:
+    build:
+      context: .
+    image: ssrf-lab:latest
+    container_name: ssrf-lab
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    networks:
+      default:
+      labnet:
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@file_get_contents('http://127.0.0.1:8080/api/health') === false ? 1 : 0);"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+
+  # 模拟外部验证主机 10.220.2.6:8080：
+  # - / 返回 MD5（有回显验证）
+  # - /index?host=<dnslog> 触发真实 DNS 查询（无回显验证）
+  # - /index?host=ssrf-lab&port=8081&path=/admin 模拟目标访问内部网络
+  target:
+    image: ssrf-lab:latest
+    container_name: ssrf-target
+    restart: unless-stopped
+    working_dir: /opt/ssrf-lab
+    entrypoint: ["php", "-S", "0.0.0.0:8080", "-t", "public", "router-target.php"]
+    networks:
+      default:
+      labnet:
+        ipv4_address: 10.220.2.6
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@file_get_contents('http://127.0.0.1:8080/') === false ? 1 : 0);"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+
+networks:
+  labnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.220.2.0/24

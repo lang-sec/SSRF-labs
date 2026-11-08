@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 function lab_business_scenarios(): array
 {
-    return [
+    $scenarios = [
         1 => [
-            'feature' => '商品图片远程导入',
+            'feature' => '目标可达性验证',
             'entry' => 'POST /products/import-image',
-            'workflow' => ['商家提交商品图片 URL', '图片代理下载并缓存资源', '后台返回图片预览'],
-            'impact' => '商家输入本应只用于图片下载，却可以让商品后台读取服务端才能访问的内网资源。',
+            'workflow' => ['提交验证端点根路径', '服务端向 10.220.2.6:8080 发起请求', '响应返回 MD5'],
+            'impact' => '服务端替调用方请求了外部验证端点，并把目标响应带回。',
         ],
         2 => [
             'feature' => '品牌 Logo 自动抓取',
@@ -72,10 +72,10 @@ function lab_business_scenarios(): array
             'impact' => '显式 URL 合法，但代理 Header 控制实际目标，导致内部 Webhook 被访问。',
         ],
         12 => [
-            'feature' => '报表导出完成通知',
+            'feature' => '无回显 SSRF 验证',
             'entry' => 'POST /reports/export',
-            'workflow' => ['用户配置完成回调地址', '导出任务在后台发起请求', '业务只返回任务已提交'],
-            'impact' => '目标响应不回显，但回调记录可以证明后台任务访问了用户指定地址。',
+            'workflow' => ['准备 dnslog 子域名', '提交带 host 参数的验证 URL', '验证端点发起真实 DNS 查询'],
+            'impact' => '目标响应不回显，但 dnslog 平台可以确认请求已经发生。',
         ],
         13 => [
             'feature' => '运营素材采集器',
@@ -102,5 +102,38 @@ function lab_business_scenarios(): array
             'impact' => '订阅源合法，但远程内容中的 enclosure 可以把下载器引向内网服务。',
         ],
     ];
+
+    // 机器可读的业务接口元数据：前端、测试和路由注册表共用同一份定义。
+    $routes = [
+        1 => ['method' => 'POST', 'api' => '/products/import-image', 'param' => 'image_url', 'solveMode' => 'md5'],
+        2 => ['method' => 'POST', 'api' => '/merchants/import-logo', 'param' => 'logo_url'],
+        3 => ['method' => 'POST', 'api' => '/campaigns/check-asset', 'param' => 'asset_url'],
+        4 => ['method' => 'POST', 'api' => '/messages/link-preview', 'param' => 'preview_url'],
+        5 => ['method' => 'POST', 'api' => '/profiles/avatar-preview', 'param' => 'avatar_url'],
+        6 => ['method' => 'POST', 'api' => '/knowledge-base/preview-attachment', 'param' => 'attachment_url'],
+        7 => ['method' => 'POST', 'api' => '/profiles/sync-avatar', 'param' => 'avatar_url'],
+        8 => ['method' => 'POST', 'api' => '/admin/assets/migrate', 'param' => 'asset_url'],
+        9 => ['method' => 'POST', 'api' => '/partners/media-sync', 'param' => 'media_url'],
+        10 => ['method' => 'POST', 'api' => '/messages/rich-preview', 'param' => 'preview_url'],
+        11 => [
+            'method' => 'POST',
+            'api' => '/webhook/test',
+            'param' => 'base_url',
+            'header' => 'X-Forwarded-Host',
+            'headerField' => 'headerHost',
+        ],
+        12 => ['method' => 'POST', 'api' => '/reports/export', 'param' => 'callback_url', 'solveMode' => 'dnslog'],
+        13 => ['method' => 'POST', 'api' => '/marketing/collect-asset', 'param' => 'resource_url'],
+        14 => ['method' => 'POST', 'api' => '/cloud/import-asset', 'param' => 'asset_url'],
+        15 => ['method' => 'POST', 'api' => '/sharing/card', 'param' => 'page_url'],
+        16 => ['method' => 'POST', 'api' => '/feeds/import', 'param' => 'feed_url'],
+    ];
+
+    foreach ($scenarios as $level => &$scenario) {
+        $scenario = array_merge($scenario, $routes[$level] ?? []);
+    }
+    unset($scenario);
+
+    return $scenarios;
 }
 

