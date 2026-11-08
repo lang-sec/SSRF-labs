@@ -1,0 +1,10 @@
+/.runtime/
+/storage/requests.jsonl
+/storage/callbacks.jsonl
+
+# Unrelated local concept-page files in the same workspace.
+/assets/
+/index.html
+/styles.css
+/app.js
+
