@@ -162,7 +162,7 @@ async function main() {
         if (!solved.badge.includes("已完成")) {
             throw new Error("The completion badge did not update.");
         }
-        if (!solved.source.includes("lab_normalize_host")) {
+        if (!solved.source.includes("LogoImportController")) {
             throw new Error("The source code did not unlock after solving.");
         }
         if (solved.progress !== "1 / 16") {
@@ -220,7 +220,7 @@ async function main() {
         if (!headerResult.body.includes("FLAG{SSRF_HEADER_DRIVEN}")) {
             throw new Error("The header-driven request did not return its FLAG.");
         }
-        if (!headerResult.badge.includes("已完成") || !headerResult.source.includes("WebhookController.php")) {
+        if (!headerResult.badge.includes("已完成") || !headerResult.source.includes("WebhookTestController")) {
             throw new Error("The level 11 source code did not unlock.");
         }
         console.log("PASS  X-Forwarded-Host submission solves level 11 and unlocks source");

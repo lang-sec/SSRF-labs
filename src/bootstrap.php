@@ -10,7 +10,7 @@ declare(strict_types=1);
  */
 require_once __DIR__ . '/challenges.php';
 require_once __DIR__ . '/functions.php';
-require_once __DIR__ . '/dns.php';
+require_once __DIR__ . '/support/DnsResolver.php';
 require_once __DIR__ . '/egress.php';
 require_once __DIR__ . '/business_api.php';
 

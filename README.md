@@ -74,6 +74,8 @@ node tests/browser-smoke.js
 - 三级渐进提示
 - 通关后可查看本关 PHP 源码
 
+每个关卡对应一个独立的业务控制器文件 `src/levels/*Controller.php`，漏洞逻辑就在该文件中；通关后展示的是这个文件的实际源码，而不是额外的演示片段。共享的出网网关、HTTP 客户端、DNS 解析器和网络判断位于 `src/support/`。
+
 初始 `/api/bootstrap` 只返回标题、提示、表单字段和业务路由，不下发 `successFlag`、业务描述或源码；目标地址放在提示里，由学习者逐条查看。源码只在通关响应中返回，并保存在当前浏览器；重置进度后清除。
 
 ## 验证端点（第 1/12 关）
@@ -143,10 +145,14 @@ node tests/browser-smoke.js
 
 ## 主要文件
 
-- `src/business_api.php` — 16 个业务 handler、结果信封和日志
+- `src/levels/*Controller.php` — 每关一个真实业务控制器，漏洞逻辑和通关后展示的源码都在这里
+- `src/business_api.php` — 控制器路由、结果信封、日志和源码下发
+- `src/support/HttpClient.php` — 业务共享 HTTP 客户端
+- `src/support/NetworkGuard.php` — 地址归一化和网络判断
+- `src/support/DnsResolver.php` — 第 5/9/14 关的确定性 DNS 解析器
+- `src/support/BusinessController.php` — 控制器基类（输入、Header、拒绝、响应）
 - `src/egress.php` — 出网边界网关、协议、重定向复查
-- `src/dns.php` — 第 5/9/14 关的确定性 DNS 解析器
-- `src/challenges.php` / `src/advanced_challenges.php` — 关卡、提示和源码
+- `src/challenges.php` / `src/advanced_challenges.php` — 关卡、提示和判定配置
 - `public/index.php` — app、internal、metadata、redirect、callback、target 角色分发
 - `router-target.php` — `10.220.2.6:8080` 验证主机入口
 - `docker-compose.yml` — `ssrf-lab` 与 `ssrf-target` 两个容器

@@ -2,14 +2,15 @@
 
 declare(strict_types=1);
 
+namespace SsrfLab\Support;
+
 /**
- * 实验室 DNS 解析器。
+ * 实验环境的确定性 DNS 解析器。
  *
- * 靶场不依赖真实 DNS：重绑定、混合记录和云元数据域名都由这里确定性返回。
- * 每个业务请求都必须 new LabResolver()，不能使用全局状态，否则 PHP 内置服务器
- * 会把上一个请求的查询次数带到下一个请求。
+ * 重绑定、混合记录和云元数据域名都由这里确定性返回；每个请求实例化一次，
+ * 避免 PHP 内置服务器跨请求复用查询次数。
  */
-final class LabResolver
+final class DnsResolver
 {
     private int $rebindLookups = 0;
 
